@@ -1,0 +1,51 @@
+# Kevin's macOS sandbox profile (generated at runtime, contains local paths)
+.kevin_sandbox.sb
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# PostgreSQL dumps
+*.sql.gz
+*_backup.sql
+
+# Python
+__pycache__/
+*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Alembic
+alembic/versions/__pycache__/
+test.py
+random code I yanked from elsewhere/inferencer_tools.py
+random code I yanked from elsewhere/inferencer_tools.json
+Sweet-code.md
+.kevin_sandbox.sb
+project_kevin_roadmap.md

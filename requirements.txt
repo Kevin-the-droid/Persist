@@ -1,0 +1,37 @@
+# FastAPI and web server
+fastapi
+uvicorn[standard]
+python-multipart # For file uploads
+httpx # Async HTTP client for MLX server
+
+# Database
+sqlalchemy
+alembic
+psycopg2-binary # PostgreSQL driver
+pgvector  # PostgreSQL vector extension
+
+# Embeddings
+sentence-transformers # For gte-base embeddings
+torch # Required by sentence-transformers
+numpy # Vector operations
+keybert # Keyword extraction for tags
+
+# Token counting
+tiktoken # For context window management
+
+# Validation
+pydantic
+pydantic-settings
+
+# Web search and fetching
+ddg  # Free web search
+trafilatura # Extract main content from web pages
+cachetools # TTL caching
+
+# Python version compatibility
+typing-extensions
+
+# MLC
+mlx
+mlx-lm
+

@@ -1,0 +1,48 @@
+.training-view {
+  min-height: 100vh;
+  background: #121212;
+  color: #e0e0e0;
+  display: flex;
+  flex-direction: column;
+}
+
+.training-view-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 24px;
+  background: #1e1e1e;
+  border-bottom: 1px solid #333;
+}
+
+.back-button {
+  padding: 8px 16px;
+  background: #2a2a2a;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  color: #e0e0e0;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+  margin-left: auto;
+}
+
+.back-button:hover {
+  background: #3a3a3a;
+  color: #fff;
+  border-color: #4a9eff;
+}
+
+.training-view-header h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.training-view-content {
+  flex: 1;
+  padding: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+}
