@@ -1,4 +1,4 @@
-# Appletta 
+# Persist
 
 **An AI agent management system with sophisticated memory architecture for use with local models using Apple's mlx-lm**
 
@@ -44,8 +44,8 @@ See **[QUICKSTART.md](QUICKSTART.md)** for detailed setup instructions.
 
 ```bash
 # 1. Set up database
-createdb appletta
-psql appletta < scripts/schema.sql
+createdb persist
+psql persist < scripts/schema.sql
 
 # 2. Install dependencies
 cd backend && pip install -r requirements.txt
@@ -115,7 +115,7 @@ Appletta isn't about efficiency metrics. It's about giving AI:
 ### Project Structure
 
 ```
-appletta/
+persist/
 ├── backend/
 │   ├── api/routes/        # FastAPI endpoints
 │   ├── db/models/         # SQLAlchemy models
