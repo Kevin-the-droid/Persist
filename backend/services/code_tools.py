@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 # ---------------------------------------------------------------------------
 
 # backend/services/code_tools.py  →  .parent.parent.parent  →  repo root
-WORKSPACE_ROOT: Path = Path(__file__).resolve().parent.parent.parent
+WORKSPACE_ROOT: Path = Path(__file__).resolve().parent.parent.parent.parent
 
 # ---------------------------------------------------------------------------
 # macOS sandbox (seatbelt)
