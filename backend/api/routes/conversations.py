@@ -1090,7 +1090,7 @@ async def _chat_stream_internal(
             current_messages = base_messages.copy()
             accumulated_response = ""
             iteration = 0
-            max_iterations = 50
+            max_iterations = 100
 
             if memory_narrative:
                 yield f"data: {json.dumps({'type': 'memory_narrative', 'content': memory_narrative})}\n\n"
