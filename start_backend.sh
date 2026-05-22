@@ -1,5 +1,5 @@
 #!/bin/bash
-# Appletta - Start Backend Only
+# Persist-Main - Start Backend
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -8,8 +8,17 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m' # No Color
 
+# Load .env if it exists
+if [ -f .env ]; then
+    set -a
+    source .env
+    set +a
+fi
+
+BACKEND_PORT="${PERSIST_BACKEND_PORT:-8000}"
+
 echo -e "${BLUE}╔═══════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║     Starting Appletta Backend        ║${NC}"
+echo -e "${BLUE}║     Persist-Main Backend              ║${NC}"
 echo -e "${BLUE}╚═══════════════════════════════════════╝${NC}"
 echo ""
 
@@ -43,9 +52,7 @@ if [ ! -d ".venv" ]; then
     echo -e "${RED}✗ No virtual environment found. Install dependencies first:${NC}"
     echo "  python3.11 -m venv .venv"
     echo "  .venv/bin/pip install --upgrade pip"
-    echo "  # Prefer the lockfile — pinned versions known to work:"
     echo "  .venv/bin/pip install -r requirements.lock.txt"
-    echo "  # (or requirements.txt if you intentionally want latest)"
     exit 1
 fi
 echo -e "${GREEN}✓ Virtual environment found${NC}"
@@ -57,8 +64,9 @@ echo -e "${GREEN}╔════════════════════
 echo -e "${GREEN}║     Backend Starting! 💜              ║${NC}"
 echo -e "${GREEN}╚═══════════════════════════════════════╝${NC}"
 echo ""
-echo "Backend:  http://localhost:8000"
-echo "API Docs: http://localhost:8000/docs"
+echo "Instance:  ${PERSIST_INSTANCE:-main}"
+echo "Backend:   http://localhost:${BACKEND_PORT}"
+echo "API Docs:  http://localhost:${BACKEND_PORT}/docs"
 echo ""
 echo "Press Ctrl+C to stop the backend"
 echo ""
