@@ -1,5 +1,5 @@
 #!/bin/bash
-# Appletta - Start Frontend Only
+# Persist - Start Frontend Only
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -9,7 +9,7 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}╔═══════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║     Starting Appletta Frontend       ║${NC}"
+echo -e "${BLUE}║     Starting Persist-Main Frontend    ║${NC}"
 echo -e "${BLUE}╚═══════════════════════════════════════╝${NC}"
 echo ""
 
