@@ -365,6 +365,14 @@ class StatefulInferenceEngine:
         loop.run_in_executor(self._executor, _run_generation)
 
         try:
+            # The chat template pre-injects '<think>\n' into the generation
+            # prompt when reasoning is enabled, so the model's raw output
+            # starts mid-thought with no opening tag.  Yield the opening tag
+            # here so downstream consumers (extract_and_strip_thinks, the
+            # frontend collapsible block renderer) see well-formed blocks.
+            if reasoning_enabled:
+                yield "<think>\n"
+
             while True:
                 item = await queue.get()
                 if item is sentinel:

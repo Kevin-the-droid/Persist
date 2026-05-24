@@ -3,7 +3,8 @@
 import asyncio
 import httpx
 import json
-from typing import List
+import re
+from typing import List, Tuple
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -36,6 +37,22 @@ from backend.services.token_counter import count_tokens, count_messages_tokens, 
 from backend.services.conversation_logger import log_message, log_conversation_event, log_debug
 
 router = APIRouter(prefix="/api/v1/conversations", tags=["conversations"])
+
+
+# ============================================================================
+# Helper functions
+# ============================================================================
+
+def extract_and_strip_thinks(text: str) -> Tuple[str, List[str]]:
+    """Extract <think> blocks and return (clean_text, [thinking_blocks]).
+
+    Returns:
+        - clean_text: text with <think> blocks removed
+        - thinking_blocks: list of content from each <think> block
+    """
+    thinks = re.findall(r'<think>(.*?)</think>', text, flags=re.DOTALL)
+    clean = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL).strip()
+    return clean, thinks
 
 
 # ============================================================================
@@ -1089,6 +1106,7 @@ async def _chat_stream_internal(
         async def generate_stream_with_tools():
             current_messages = base_messages.copy()
             accumulated_response = ""
+            all_thinking_blocks = []  # Collect thinks across iterations for metadata
             iteration = 0
             max_iterations = 100
 
@@ -1104,6 +1122,14 @@ async def _chat_stream_internal(
                 print(f"{'='*60}")
 
                 try:
+                    # NOTE: tools are NOT passed to stream_chat. The system
+                    # prompt manifest already teaches Kevin the XML syntax and
+                    # lists every tool with human-readable descriptions. Passing
+                    # tools here would cause the chat template to inject a SECOND
+                    # tool section (JSON schema format), which confuses the model
+                    # into narrating tool intent instead of emitting the XML.
+                    # The chat template still correctly formats tool_calls and
+                    # tool-role messages in the conversation history without this.
                     async for chunk in inference_engine.stream_chat(
                         conversation_id=conversation_id,
                         messages=current_messages,
@@ -1114,7 +1140,6 @@ async def _chat_stream_internal(
                         top_k=getattr(agent, "top_k", 100) or 100,
                         max_tokens=agent.max_output_tokens if agent.max_output_tokens_enabled else 4096,
                         reasoning_enabled=agent.reasoning_enabled,
-                        tools=tools,
                     ):
                         raw_response += chunk
                 except Exception as e:
@@ -1128,12 +1153,21 @@ async def _chat_stream_internal(
                 tool_calls = parse_minimax_tool_calls(raw_response, tools)
 
                 if not tool_calls:
-                    # Final response — stream it to the user
+                    # Final response — send thinks as collapsible events, then stream clean content
+                    clean_response, thinks = extract_and_strip_thinks(raw_response)
+                    all_thinking_blocks.extend(t.strip() for t in thinks)
+
+                    # Send thinking blocks as collapsible events
+                    for think in thinks:
+                        yield f"data: {json.dumps({'type': 'thinking', 'content': think.strip()})}\n\n"
+                        await asyncio.sleep(0.005)
+
+                    # Stream clean response content
                     chunk_size = 20
-                    for i in range(0, len(raw_response), chunk_size):
-                        yield f"data: {json.dumps({'type': 'content', 'content': raw_response[i:i+chunk_size]})}\n\n"
+                    for i in range(0, len(clean_response), chunk_size):
+                        yield f"data: {json.dumps({'type': 'content', 'content': clean_response[i:i+chunk_size]})}\n\n"
                         await asyncio.sleep(0.01)
-                    accumulated_response += raw_response
+                    accumulated_response += clean_response
                     break
 
                 # Tool calls detected — build structured assistant message then execute
@@ -1141,10 +1175,17 @@ async def _chat_stream_internal(
 
                 # The chat template requires tool_calls on the assistant message (not just raw XML
                 # in content) otherwise it rejects the following tool-role messages.
-                # Extract any text before the first tool call (think block etc.) as content.
-                pre_call_text = raw_response.split("<minimax:tool_call>")[0].strip() or None
+                # Extract text before first tool call, strip thinks, send them separately.
+                pre_call_all = raw_response.split("<minimax:tool_call>")[0].strip()
+                pre_call_text, thinks = extract_and_strip_thinks(pre_call_all)
+                all_thinking_blocks.extend(t.strip() for t in thinks)
 
-                # Stream Kevin's text from this iteration to the user before the tool call events
+                # Send thinking blocks as collapsible events
+                for think in thinks:
+                    yield f"data: {json.dumps({'type': 'thinking', 'content': think.strip()})}\n\n"
+                    await asyncio.sleep(0.005)
+
+                # Stream Kevin's clean text (no thinks) before the tool call events
                 if pre_call_text:
                     chunk_size = 20
                     for _ci in range(0, len(pre_call_text), chunk_size):
@@ -1186,6 +1227,8 @@ async def _chat_stream_internal(
                 "tool_iterations": iteration,
                 "tags": assistant_tags,
             }
+            if all_thinking_blocks:
+                assistant_metadata["thinking_blocks"] = all_thinking_blocks
             if memory_narrative:
                 assistant_metadata["memory_narrative"] = memory_narrative
 
@@ -1278,8 +1321,14 @@ async def _chat_stream_internal(
             print(f"Content: {final_response}")
             print(f"{'='*80}\n")
 
-            # Save complete assistant message to database
-            assistant_tags = extract_keywords(final_response, max_keywords=5)
+            # Extract and strip thinks from final response, send thinking events
+            clean_final_response, thinks = extract_and_strip_thinks(final_response)
+            for think in thinks:
+                yield f"data: {json.dumps({'type': 'thinking', 'content': think.strip()})}\n\n"
+                await asyncio.sleep(0.005)
+
+            # Save complete assistant message to database with CLEAN response
+            assistant_tags = extract_keywords(clean_final_response, max_keywords=5)
             assistant_metadata = {
                 "model": agent.model_path,
                 "streamed": True,
@@ -1288,6 +1337,10 @@ async def _chat_stream_internal(
             # Include memory narrative if present
             if memory_narrative:
                 assistant_metadata["memory_narrative"] = memory_narrative
+            # Store thinking blocks in metadata for persistence
+            if thinks:
+                assistant_metadata["thinking_blocks"] = [t.strip() for t in thinks]
+                final_response = clean_final_response
 
             assistant_message = Message(
                 conversation_id=conversation_id,

@@ -604,3 +604,44 @@
 .stream-content .tool-call-block {
   margin: 2px 0;
 }
+
+/* ── Thinking blocks (collapsible reasoning) ───────────────── */
+
+.thinking-block {
+  margin: 2px 0;
+  border-radius: 6px;
+  border: 1px solid var(--thinking-border, #4a4a1a);
+  background: var(--thinking-bg, #1a1a0a);
+  overflow: hidden;
+}
+
+.thinking-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  color: #b8a55a;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.thinking-header:hover {
+  background: var(--thinking-header-hover, #2a2a15);
+}
+
+.thinking-body {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #9a9040;
+  border-top: 1px solid var(--thinking-border, #4a4a1a);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.thinking-body pre {
+  font-family: inherit;
+}

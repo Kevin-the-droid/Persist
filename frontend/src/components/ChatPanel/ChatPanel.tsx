@@ -16,7 +16,8 @@ interface ChatPanelProps {
 
 type StreamItem =
   | { kind: 'text'; id: string; content: string }
-  | { kind: 'tool'; id: string; name: string; arguments: Record<string, unknown>; result?: unknown; error?: string; pending: boolean; collapsed: boolean };
+  | { kind: 'tool'; id: string; name: string; arguments: Record<string, unknown>; result?: unknown; error?: string; pending: boolean; collapsed: boolean }
+  | { kind: 'thinking'; id: string; content: string; collapsed: boolean };
 
 export default function ChatPanel({ agentId, agents, conversationId, onConversationChange, onAgentChange }: ChatPanelProps) {
   const [currentConversation, setCurrentConversation] = useState<Conversation | null>(null);
@@ -101,18 +102,32 @@ export default function ChatPanel({ agentId, agents, conversationId, onConversat
       const data = await conversationAPI.getMessages(convId);
       setMessages(data);
 
-      // Extract memory narratives from message metadata
+      // Extract memory narratives and thinking blocks from message metadata
       const narratives: Array<{id: string, content: string, collapsed: boolean}> = [];
+      const restoredStreamItems: Record<string, StreamItem[]> = {};
       data.forEach((msg: any) => {
-        if (msg.role === 'assistant' && msg.metadata && msg.metadata.memory_narrative) {
-          narratives.push({
-            id: msg.id,
-            content: msg.metadata.memory_narrative,
-            collapsed: false // Default to expanded
-          });
+        if (msg.role === 'assistant' && msg.metadata) {
+          if (msg.metadata.memory_narrative) {
+            narratives.push({
+              id: msg.id,
+              content: msg.metadata.memory_narrative,
+              collapsed: false // Default to expanded
+            });
+          }
+          // Restore thinking blocks from metadata
+          if (msg.metadata.thinking_blocks) {
+            const items: StreamItem[] = (msg.metadata.thinking_blocks as string[]).map((think: string, i: number) => ({
+              kind: 'thinking' as const,
+              id: `loaded-thinking-${msg.id}-${i}`,
+              content: think,
+              collapsed: true, // Default to collapsed on load
+            }));
+            restoredStreamItems[msg.id] = items;
+          }
         }
       });
       setSavedMemoryNarratives(narratives);
+      setSavedStreamItems(prev => ({ ...prev, ...restoredStreamItems }));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load messages');
     }
@@ -234,6 +249,15 @@ export default function ChatPanel({ agentId, agents, conversationId, onConversat
           ));
         }
 
+      } else if (data.type === 'thinking') {
+        const eventId = `thinking-${Date.now()}-${toolCallIndexRef.current}`;
+        setStreamItems(prev => [...prev, {
+          kind: 'thinking',
+          id: eventId,
+          content: data.content,
+          collapsed: true, // Default to collapsed
+        }]);
+
       } else if (data.type === 'done') {
         if (memoryNarrative) {
           setSavedMemoryNarratives((prev) => [
@@ -241,7 +265,7 @@ export default function ChatPanel({ agentId, agents, conversationId, onConversat
             { id: data.assistant_message.id, content: memoryNarrative, collapsed: false }
           ]);
         }
-        // Persist stream items (tool calls + text) under the finalized message ID
+        // Persist stream items (tool calls + text + thinking) under the finalized message ID
         setStreamItems(current => {
           if (current.length > 0) {
             setSavedStreamItems(prev => ({ ...prev, [data.assistant_message.id]: current }));
@@ -559,11 +583,36 @@ export default function ChatPanel({ agentId, agents, conversationId, onConversat
                         </span>
                         <span className="message-time">{formatTime(message.created_at)}</span>
                       </div>
-                      {savedStreamItems[message.id] ? (
-                        <div className="message-content stream-content">
-                          {savedStreamItems[message.id].map(item => {
-                            if (item.kind === 'text') {
-                              return <span key={item.id} style={{ whiteSpace: 'pre-wrap' }}>{item.content}</span>;
+                      {/* Render thinking/tool blocks from stream items (if any) */}
+                      {savedStreamItems[message.id] && savedStreamItems[message.id].some(i => i.kind !== 'text') && (
+                        <div className="stream-content">
+                          {savedStreamItems[message.id].filter(i => i.kind !== 'text').map(item => {
+                            if (item.kind === 'thinking') {
+                              return (
+                                <div key={item.id} className="thinking-block">
+                                  <button
+                                    className="thinking-header"
+                                    onClick={() => {
+                                      setSavedStreamItems(prev => ({
+                                        ...prev,
+                                        [message.id]: prev[message.id].map(i =>
+                                          i.kind === 'thinking' && i.id === item.id ? { ...i, collapsed: !i.collapsed } : i
+                                        )
+                                      }));
+                                    }}
+                                  >
+                                    <span className="tool-call-chevron">{item.collapsed ? '▸' : '▾'}</span>
+                                    <span className="tool-call-icon">💭</span>
+                                    <span className="tool-call-name">Reasoning</span>
+                                    {item.collapsed && <span className="tool-call-badge done">collapsed</span>}
+                                  </button>
+                                  {!item.collapsed && (
+                                    <div className="thinking-body">
+                                      <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{item.content}</pre>
+                                    </div>
+                                  )}
+                                </div>
+                              );
                             }
                             return (
                               <div key={item.id} className={`tool-call-block ${item.error ? 'errored' : ''}`}>
@@ -609,9 +658,9 @@ export default function ChatPanel({ agentId, agents, conversationId, onConversat
                             );
                           })}
                         </div>
-                      ) : (
-                        <div className="message-content">{message.content}</div>
                       )}
+                      {/* Always render message.content — it's the clean text (thinks already stripped) */}
+                      <div className="message-content">{message.content}</div>
                     <div className="message-actions">
                       {/* Edit button - available for both user and assistant messages */}
                       <button
@@ -747,6 +796,30 @@ export default function ChatPanel({ agentId, agents, conversationId, onConversat
                   {streamItems.map(item => {
                     if (item.kind === 'text') {
                       return <span key={item.id} style={{ whiteSpace: 'pre-wrap' }}>{item.content}</span>;
+                    }
+                    if (item.kind === 'thinking') {
+                      return (
+                        <div key={item.id} className="thinking-block">
+                          <button
+                            className="thinking-header"
+                            onClick={() => {
+                              setStreamItems(prev => prev.map(i =>
+                                i.kind === 'thinking' && i.id === item.id ? { ...i, collapsed: !i.collapsed } : i
+                              ));
+                            }}
+                          >
+                            <span className="tool-call-chevron">{item.collapsed ? '▸' : '▾'}</span>
+                            <span className="tool-call-icon">💭</span>
+                            <span className="tool-call-name">Reasoning</span>
+                            {item.collapsed && <span className="tool-call-badge done">collapsed</span>}
+                          </button>
+                          {!item.collapsed && (
+                            <div className="thinking-body">
+                              <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{item.content}</pre>
+                            </div>
+                          )}
+                        </div>
+                      );
                     }
                     return (
                       <div key={item.id} className={`tool-call-block ${item.pending ? 'pending' : ''} ${item.error ? 'errored' : ''}`}>
