@@ -715,7 +715,8 @@ export default function ChatPanel({ agentId, agents, conversationId, onConversat
                         </div>
                       ) : (
                         <>
-                          {/* Legacy format: thinking/tool blocks then message content */}
+                          {/* Legacy format: no ordering info — show message text first, then thinking/tools below */}
+                          <div className="message-content">{message.content}</div>
                           {savedStreamItems[message.id] && savedStreamItems[message.id].some(i => i.kind !== 'text') && (
                             <div className="stream-content">
                               {savedStreamItems[message.id].filter(i => i.kind !== 'text').map(item => {
@@ -791,7 +792,6 @@ export default function ChatPanel({ agentId, agents, conversationId, onConversat
                               })}
                             </div>
                           )}
-                          <div className="message-content">{message.content}</div>
                         </>
                       )}
                     <div className="message-actions">

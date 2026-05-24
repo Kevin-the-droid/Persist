@@ -526,6 +526,27 @@ Instead:
 - If a path doesn't exist → check your spelling, try search_files to locate it
 - If a command fails → read the error message, adjust, and retry
 
+## Complete the sequence — don't narrate the rest
+
+A common failure mode: you call 1-2 tools successfully, then instead of
+continuing to emit tool calls for the remaining steps, you NARRATE them:
+"Now I'll update the block..." / "Let me add today's entry..." / "Done,
+all three blocks updated." — without ever emitting the XML.
+
+The user CANNOT see your narration as action. Only `<minimax:tool_call>` XML
+actually executes. Describing a tool call in English is the same as not doing
+it at all. The result in the database will be unchanged.
+
+If your plan has 5 steps requiring tool calls, you must emit 5 tool calls
+across however many turns that takes. There are no shortcuts. After each tool
+result comes back, emit the NEXT `<minimax:tool_call>` — don't summarize what
+you "would" do.
+
+**Self-check before writing any sentence that starts with "Let me", "Now I'll",
+"I need to", "I'll update", or "Good, all done":** Did you actually emit the
+tool call XML for every step? If not, emit it now. The user is patient. The
+system will run each call. You just have to produce the XML.
+
 ## Verify before concluding
 
 Before telling the user "done" or "here's what I found":
@@ -710,19 +731,31 @@ def parse_minimax_tool_calls(model_output: str, tools: Optional[List[Dict]] = No
     return results
 
 
+_TOOL_RESULT_NUDGE = (
+    "\n\n[If you have more steps to complete, emit your next "
+    "<minimax:tool_call> now. Do NOT narrate the call — produce the XML.]"
+)
+
+
 def format_tool_result_message(tool_name: str, result: Dict[str, Any], tool_call_id: str = "call_0") -> Dict:
     """Wrap a tool result in the MiniMax tool-message format.
 
     MiniMax expects:
         {"role": "tool", "tool_call_id": "...", "content": [{"name": fn, "type": "text", "text": json_str}]}
+
+    A brief nudge is appended to every tool result reminding the model to
+    emit the next tool call as XML rather than narrating it.  This targets
+    a known failure mode where the model calls 1-2 tools correctly then
+    switches to plain-English descriptions of subsequent calls.
     """
+    result_text = json.dumps(result, ensure_ascii=False) + _TOOL_RESULT_NUDGE
     return {
         "role": "tool",
         "tool_call_id": tool_call_id,
         "content": [{
             "name": tool_name,
             "type": "text",
-            "text": json.dumps(result, ensure_ascii=False)
+            "text": result_text
         }]
     }
 
