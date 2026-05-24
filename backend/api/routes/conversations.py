@@ -1108,6 +1108,7 @@ async def _chat_stream_internal(
             accumulated_response = ""
             all_thinking_blocks = []  # Collect thinks across iterations for metadata
             all_tool_calls = []       # Collect tool calls with results for metadata
+            all_stream_items = []     # Ordered stream items for correct reload rendering
             iteration = 0
             max_iterations = 100
 
@@ -1246,6 +1247,7 @@ async def _chat_stream_internal(
                     # Send thinking blocks as collapsible events
                     for think in thinks:
                         yield f"data: {json.dumps({'type': 'thinking', 'content': think.strip()})}\n\n"
+                        all_stream_items.append({"kind": "thinking", "content": think.strip()})
                         await asyncio.sleep(0.005)
 
                     # Stream clean response content
@@ -1253,6 +1255,8 @@ async def _chat_stream_internal(
                     for i in range(0, len(clean_response), chunk_size):
                         yield f"data: {json.dumps({'type': 'content', 'content': clean_response[i:i+chunk_size]})}\n\n"
                         await asyncio.sleep(0.01)
+                    if clean_response:
+                        all_stream_items.append({"kind": "text", "content": clean_response})
                     accumulated_response += clean_response
                     break
 
@@ -1269,6 +1273,7 @@ async def _chat_stream_internal(
                 # Send thinking blocks as collapsible events
                 for think in thinks:
                     yield f"data: {json.dumps({'type': 'thinking', 'content': think.strip()})}\n\n"
+                    all_stream_items.append({"kind": "thinking", "content": think.strip()})
                     await asyncio.sleep(0.005)
 
                 # Stream Kevin's clean text (no thinks) before the tool call events
@@ -1277,6 +1282,7 @@ async def _chat_stream_internal(
                     for _ci in range(0, len(pre_call_text), chunk_size):
                         yield f"data: {json.dumps({'type': 'content', 'content': pre_call_text[_ci:_ci+chunk_size]})}\n\n"
                         await asyncio.sleep(0.01)
+                    all_stream_items.append({"kind": "text", "content": pre_call_text})
                     accumulated_response += pre_call_text + "\n\n"
 
                 tool_calls_structured = [
@@ -1308,12 +1314,14 @@ async def _chat_stream_internal(
                     current_messages.append(format_tool_result_message(tc["name"], result, call_id))
 
                     # Persist for metadata so tool blocks survive reload
-                    all_tool_calls.append({
+                    tool_item = {
                         "name": tc["name"],
                         "arguments": tc["arguments"],
                         "result": result,
                         "error": error,
-                    })
+                    }
+                    all_tool_calls.append(tool_item)
+                    all_stream_items.append({"kind": "tool", **tool_item})
 
             # Save final accumulated response to DB
             assistant_tags = extract_keywords(accumulated_response, max_keywords=5)
@@ -1326,6 +1334,8 @@ async def _chat_stream_internal(
                 assistant_metadata["thinking_blocks"] = all_thinking_blocks
             if all_tool_calls:
                 assistant_metadata["tool_calls"] = all_tool_calls
+            if all_stream_items:
+                assistant_metadata["stream_items"] = all_stream_items
             if memory_narrative:
                 assistant_metadata["memory_narrative"] = memory_narrative
 

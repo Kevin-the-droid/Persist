@@ -114,31 +114,63 @@ export default function ChatPanel({ agentId, agents, conversationId, onConversat
               collapsed: false // Default to expanded
             });
           }
-          // Restore thinking blocks and tool calls from metadata
+          // Restore stream items from metadata — prefer ordered stream_items
           const items: StreamItem[] = [];
-          if (msg.metadata.thinking_blocks) {
-            (msg.metadata.thinking_blocks as string[]).forEach((think: string, i: number) => {
-              items.push({
-                kind: 'thinking' as const,
-                id: `loaded-thinking-${msg.id}-${i}`,
-                content: think,
-                collapsed: true,
-              });
+          if (msg.metadata.stream_items) {
+            // New format: ordered array preserving interleaved text/thinking/tool
+            (msg.metadata.stream_items as any[]).forEach((si: any, i: number) => {
+              if (si.kind === 'thinking') {
+                items.push({
+                  kind: 'thinking' as const,
+                  id: `loaded-thinking-${msg.id}-${i}`,
+                  content: si.content,
+                  collapsed: true,
+                });
+              } else if (si.kind === 'tool') {
+                items.push({
+                  kind: 'tool' as const,
+                  id: `loaded-tool-${msg.id}-${i}`,
+                  name: si.name,
+                  arguments: si.arguments ?? {},
+                  result: si.result,
+                  error: si.error,
+                  pending: false,
+                  collapsed: true,
+                });
+              } else if (si.kind === 'text') {
+                items.push({
+                  kind: 'text' as const,
+                  id: `loaded-text-${msg.id}-${i}`,
+                  content: si.content,
+                });
+              }
             });
-          }
-          if (msg.metadata.tool_calls) {
-            (msg.metadata.tool_calls as any[]).forEach((tc: any, i: number) => {
-              items.push({
-                kind: 'tool' as const,
-                id: `loaded-tool-${msg.id}-${i}`,
-                name: tc.name,
-                arguments: tc.arguments ?? {},
-                result: tc.result,
-                error: tc.error,
-                pending: false,
-                collapsed: true,
+          } else {
+            // Legacy format: separate thinking_blocks and tool_calls arrays
+            if (msg.metadata.thinking_blocks) {
+              (msg.metadata.thinking_blocks as string[]).forEach((think: string, i: number) => {
+                items.push({
+                  kind: 'thinking' as const,
+                  id: `loaded-thinking-${msg.id}-${i}`,
+                  content: think,
+                  collapsed: true,
+                });
               });
-            });
+            }
+            if (msg.metadata.tool_calls) {
+              (msg.metadata.tool_calls as any[]).forEach((tc: any, i: number) => {
+                items.push({
+                  kind: 'tool' as const,
+                  id: `loaded-tool-${msg.id}-${i}`,
+                  name: tc.name,
+                  arguments: tc.arguments ?? {},
+                  result: tc.result,
+                  error: tc.error,
+                  pending: false,
+                  collapsed: true,
+                });
+              });
+            }
           }
           if (items.length > 0) {
             restoredStreamItems[msg.id] = items;
@@ -602,10 +634,14 @@ export default function ChatPanel({ agentId, agents, conversationId, onConversat
                         </span>
                         <span className="message-time">{formatTime(message.created_at)}</span>
                       </div>
-                      {/* Render thinking/tool blocks from stream items (if any) */}
-                      {savedStreamItems[message.id] && savedStreamItems[message.id].some(i => i.kind !== 'text') && (
-                        <div className="stream-content">
-                          {savedStreamItems[message.id].filter(i => i.kind !== 'text').map(item => {
+                      {/* Render stream items in original order (text + thinking + tools interleaved) */}
+                      {savedStreamItems[message.id] && savedStreamItems[message.id].some(i => i.kind === 'text') ? (
+                        // New format: stream_items includes text segments — render everything inline
+                        <div className="message-content stream-content">
+                          {savedStreamItems[message.id].map(item => {
+                            if (item.kind === 'text') {
+                              return <span key={item.id} style={{ whiteSpace: 'pre-wrap' }}>{item.content}</span>;
+                            }
                             if (item.kind === 'thinking') {
                               return (
                                 <div key={item.id} className="thinking-block">
@@ -677,9 +713,87 @@ export default function ChatPanel({ agentId, agents, conversationId, onConversat
                             );
                           })}
                         </div>
+                      ) : (
+                        <>
+                          {/* Legacy format: thinking/tool blocks then message content */}
+                          {savedStreamItems[message.id] && savedStreamItems[message.id].some(i => i.kind !== 'text') && (
+                            <div className="stream-content">
+                              {savedStreamItems[message.id].filter(i => i.kind !== 'text').map(item => {
+                                if (item.kind === 'thinking') {
+                                  return (
+                                    <div key={item.id} className="thinking-block">
+                                      <button
+                                        className="thinking-header"
+                                        onClick={() => {
+                                          setSavedStreamItems(prev => ({
+                                            ...prev,
+                                            [message.id]: prev[message.id].map(i =>
+                                              i.kind === 'thinking' && i.id === item.id ? { ...i, collapsed: !i.collapsed } : i
+                                            )
+                                          }));
+                                        }}
+                                      >
+                                        <span className="tool-call-chevron">{item.collapsed ? '▸' : '▾'}</span>
+                                        <span className="tool-call-icon">💭</span>
+                                        <span className="tool-call-name">Reasoning</span>
+                                        {item.collapsed && <span className="tool-call-badge done">collapsed</span>}
+                                      </button>
+                                      {!item.collapsed && (
+                                        <div className="thinking-body">
+                                          <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{item.content}</pre>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                }
+                                return (
+                                  <div key={item.id} className={`tool-call-block ${item.error ? 'errored' : ''}`}>
+                                    <button
+                                      className="tool-call-header"
+                                      onClick={() => {
+                                        setSavedStreamItems(prev => ({
+                                          ...prev,
+                                          [message.id]: prev[message.id].map(i =>
+                                            i.kind === 'tool' && i.id === item.id ? { ...i, collapsed: !i.collapsed } : i
+                                          )
+                                        }));
+                                      }}
+                                    >
+                                      <span className="tool-call-chevron">{item.collapsed ? '▸' : '▾'}</span>
+                                      <span className="tool-call-icon">⚙</span>
+                                      <span className="tool-call-name">{item.name}</span>
+                                      {!item.error && <span className="tool-call-badge done">done</span>}
+                                      {item.error && <span className="tool-call-badge error">error</span>}
+                                    </button>
+                                    {!item.collapsed && (
+                                      <div className="tool-call-body">
+                                        <div className="tool-call-section-label">Input</div>
+                                        <div className="tool-call-args">
+                                          {Object.entries(item.arguments).length === 0
+                                            ? <span className="tool-call-empty">no arguments</span>
+                                            : Object.entries(item.arguments).map(([k, v]) => (
+                                              <div key={k} className="tool-call-arg-row">
+                                                <span className="tool-call-arg-key">{k}</span>
+                                                <span className="tool-call-arg-val">{formatToolValue(v)}</span>
+                                              </div>
+                                            ))
+                                          }
+                                        </div>
+                                        <div className="tool-call-section-label">Output</div>
+                                        {item.error
+                                          ? <div className="tool-call-result error">{item.error}</div>
+                                          : <pre className="tool-call-result">{formatToolValue(item.result)}</pre>
+                                        }
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                          <div className="message-content">{message.content}</div>
+                        </>
                       )}
-                      {/* Always render message.content — it's the clean text (thinks already stripped) */}
-                      <div className="message-content">{message.content}</div>
                     <div className="message-actions">
                       {/* Edit button - available for both user and assistant messages */}
                       <button
