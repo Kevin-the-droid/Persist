@@ -16,9 +16,24 @@ import asyncio
 import hashlib
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import AsyncGenerator, Dict, List, Optional, Tuple
 from uuid import UUID
+
+
+@dataclass
+class GenerationMeta:
+    """Metadata from the final stream_generate response.
+
+    Attached to the inference engine after each stream_chat call so callers
+    can check finish_reason, token counts, etc.
+    """
+    finish_reason: Optional[str] = None
+    generation_tokens: int = 0
+    prompt_tokens: int = 0
+    generation_tps: float = 0.0
+    peak_memory_gb: float = 0.0
 
 # MLX is imported lazily inside StatefulInferenceEngine.__init__ so the
 # uvicorn reloader process never loads MLX (and its background scheduler
@@ -340,12 +355,17 @@ class StatefulInferenceEngine:
         queue: asyncio.Queue = asyncio.Queue(maxsize=100)
         sentinel = object()
 
+        # Mutable container so the generator thread can deposit metadata
+        gen_meta = GenerationMeta()
+        self.last_generation_meta = gen_meta
+
         def _run_generation():
             # Defensive: if for any reason this is the first task on this
             # thread (e.g. model load happened on a different code path),
             # bind mlx_lm + rebind generation_stream here.
             self._import_mlx_on_executor()
             try:
+                last_response = None
                 for response in stream_generate(
                     model,
                     tokenizer,
@@ -354,9 +374,16 @@ class StatefulInferenceEngine:
                     sampler=sampler,
                     prompt_cache=prompt_cache,
                 ):
+                    last_response = response
                     asyncio.run_coroutine_threadsafe(
                         queue.put(response.text), loop
                     ).result()
+                if last_response is not None:
+                    gen_meta.finish_reason = last_response.finish_reason
+                    gen_meta.generation_tokens = last_response.generation_tokens
+                    gen_meta.prompt_tokens = last_response.prompt_tokens
+                    gen_meta.generation_tps = last_response.generation_tps
+                    gen_meta.peak_memory_gb = last_response.peak_memory
             except Exception as exc:
                 asyncio.run_coroutine_threadsafe(queue.put(exc), loop).result()
             finally:

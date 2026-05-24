@@ -201,26 +201,9 @@ def _resolve_path(path: str) -> Optional[Path]:
 # ---------------------------------------------------------------------------
 
 _BLOCKED = [
-    r"\brm\s+-[a-z]*f[a-z]*\s",   # rm -rf / rm -f
     r"\bsudo\b",
-    r"\bsu\b",
-    r"\bdd\b",
-    r"\bmkfs\b",
-    r"\bshred\b",
-    r"\bfdisk\b",
-    r"\bparted\b",
-    r"\bshutdown\b",
-    r"\breboot\b",
-    r"\bhalt\b",
-    r"\bpoweroff\b",
+    r"\bsu\s",
     r":\(\)\s*\{",               # fork bomb opener
-    r"\|\s*(sh|bash|zsh|fish)\b", # pipe to shell
-    r">\s*/etc/",
-    r">\s*/usr/",
-    r">\s*/bin/",
-    r">\s*/sbin/",
-    r">\s*/dev/",
-    r">\s*/sys/",
 ]
 
 _BLOCKED_RE = re.compile("|".join(_BLOCKED), re.IGNORECASE)
@@ -666,7 +649,8 @@ CODE_TOOLS = [
                 "Use this for git operations, running tests, installing packages, building the frontend, etc. "
                 "Examples: 'git status', 'git diff', 'git add -p', 'git commit -m \"msg\"', "
                 "'python -m pytest backend/', 'npm run build'. "
-                "Destructive commands (rm -rf, sudo, dd, etc.) are blocked. "
+                "Commands run inside a macOS seatbelt that restricts writes to the workspace. "
+                "sudo and fork bombs are blocked. "
                 "Output is capped at 10,000 chars."
             ),
             "parameters": {

@@ -114,14 +114,33 @@ export default function ChatPanel({ agentId, agents, conversationId, onConversat
               collapsed: false // Default to expanded
             });
           }
-          // Restore thinking blocks from metadata
+          // Restore thinking blocks and tool calls from metadata
+          const items: StreamItem[] = [];
           if (msg.metadata.thinking_blocks) {
-            const items: StreamItem[] = (msg.metadata.thinking_blocks as string[]).map((think: string, i: number) => ({
-              kind: 'thinking' as const,
-              id: `loaded-thinking-${msg.id}-${i}`,
-              content: think,
-              collapsed: true, // Default to collapsed on load
-            }));
+            (msg.metadata.thinking_blocks as string[]).forEach((think: string, i: number) => {
+              items.push({
+                kind: 'thinking' as const,
+                id: `loaded-thinking-${msg.id}-${i}`,
+                content: think,
+                collapsed: true,
+              });
+            });
+          }
+          if (msg.metadata.tool_calls) {
+            (msg.metadata.tool_calls as any[]).forEach((tc: any, i: number) => {
+              items.push({
+                kind: 'tool' as const,
+                id: `loaded-tool-${msg.id}-${i}`,
+                name: tc.name,
+                arguments: tc.arguments ?? {},
+                result: tc.result,
+                error: tc.error,
+                pending: false,
+                collapsed: true,
+              });
+            });
+          }
+          if (items.length > 0) {
             restoredStreamItems[msg.id] = items;
           }
         }

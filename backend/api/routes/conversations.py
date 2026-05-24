@@ -1107,6 +1107,7 @@ async def _chat_stream_internal(
             current_messages = base_messages.copy()
             accumulated_response = ""
             all_thinking_blocks = []  # Collect thinks across iterations for metadata
+            all_tool_calls = []       # Collect tool calls with results for metadata
             iteration = 0
             max_iterations = 100
 
@@ -1130,6 +1131,10 @@ async def _chat_stream_internal(
                     # into narrating tool intent instead of emitting the XML.
                     # The chat template still correctly formats tool_calls and
                     # tool-role messages in the conversation history without this.
+                    effective_max_tokens = getattr(
+                        agent, '_tool_loop_max_tokens',
+                        agent.max_output_tokens if agent.max_output_tokens_enabled else 4096,
+                    )
                     async for chunk in inference_engine.stream_chat(
                         conversation_id=conversation_id,
                         messages=current_messages,
@@ -1138,7 +1143,7 @@ async def _chat_stream_internal(
                         temperature=agent.temperature,
                         top_p=getattr(agent, "top_p", 1.0) or 1.0,
                         top_k=getattr(agent, "top_k", 100) or 100,
-                        max_tokens=agent.max_output_tokens if agent.max_output_tokens_enabled else 4096,
+                        max_tokens=effective_max_tokens,
                         reasoning_enabled=agent.reasoning_enabled,
                     ):
                         raw_response += chunk
@@ -1148,14 +1153,95 @@ async def _chat_stream_internal(
                     yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
                     return
 
+                # --- Generation diagnostics ---
+                gen_meta = getattr(inference_engine, 'last_generation_meta', None)
+                finish_reason = getattr(gen_meta, 'finish_reason', None) if gen_meta else None
+                gen_tokens = getattr(gen_meta, 'generation_tokens', 0) if gen_meta else 0
+                prompt_tokens = getattr(gen_meta, 'prompt_tokens', 0) if gen_meta else 0
+                gen_tps = getattr(gen_meta, 'generation_tps', 0) if gen_meta else 0
+
                 print(f"📥 Raw response ({len(raw_response)} chars):\n{raw_response}\n{'─'*60}")
+                print(f"📊 finish_reason={finish_reason}  gen_tokens={gen_tokens}  prompt_tokens={prompt_tokens}  tps={gen_tps:.1f}")
+
+                log_debug(
+                    category="tool_loop",
+                    message=f"Iteration {iteration} complete",
+                    data={
+                        "iteration": iteration,
+                        "response_chars": len(raw_response),
+                        "finish_reason": finish_reason,
+                        "generation_tokens": gen_tokens,
+                        "prompt_tokens": prompt_tokens,
+                        "generation_tps": round(gen_tps, 1),
+                        "response_tail": raw_response[-200:] if raw_response else "",
+                    },
+                    conversation_id=str(conversation_id),
+                    agent_id=str(agent.id),
+                )
 
                 tool_calls = parse_minimax_tool_calls(raw_response, tools)
 
                 if not tool_calls:
+                    # Check if the model was cut off mid-tool-call by max_tokens
+                    truncated_tool_attempt = (
+                        finish_reason == "length"
+                        and "<minimax:tool_call>" in raw_response
+                        and "</minimax:tool_call>" not in raw_response
+                    )
+
+                    # Also detect: model narrated tool intent but ran out of
+                    # tokens before emitting XML (e.g. "Let me search that:")
+                    _tool_names = [t["function"]["name"] for t in tools]
+                    _narration_re = re.compile(
+                        r"(?:let me|i(?:'ll| will| can)|going to|i'm going to)\b.{0,40}\b("
+                        + "|".join(re.escape(n) for n in _tool_names)
+                        + r")\b",
+                        re.IGNORECASE,
+                    )
+                    narrated_tool_intent = (
+                        finish_reason == "length"
+                        and _narration_re.search(raw_response) is not None
+                    )
+
+                    if truncated_tool_attempt or narrated_tool_intent:
+                        label = "TRUNCATED TOOL CALL" if truncated_tool_attempt else "NARRATED TOOL INTENT (no XML)"
+                        print(f"⚠️  {label} — finish_reason=length, "
+                              f"gen_tokens={gen_tokens}. Retrying with 2x tokens.")
+                        log_debug(
+                            category="tool_loop_truncated",
+                            message=f"{label}, retrying with more tokens",
+                            data={
+                                "iteration": iteration,
+                                "generation_tokens": gen_tokens,
+                                "response_tail": raw_response[-300:],
+                                "detection": "truncated_xml" if truncated_tool_attempt else "narrated_intent",
+                            },
+                            conversation_id=str(conversation_id),
+                            agent_id=str(agent.id),
+                        )
+                        yield f"data: {json.dumps({'type': 'status', 'content': '(retrying — response was cut short)'})}\n\n"
+                        inference_engine.invalidate_conversation(conversation_id)
+                        current_max_tokens = agent.max_output_tokens if agent.max_output_tokens_enabled else 4096
+                        agent._tool_loop_max_tokens = min(
+                            getattr(agent, '_tool_loop_max_tokens', current_max_tokens) * 2,
+                            16384,
+                        )
+                        iteration -= 1
+                        continue
+
                     # Final response — send thinks as collapsible events, then stream clean content
                     clean_response, thinks = extract_and_strip_thinks(raw_response)
                     all_thinking_blocks.extend(t.strip() for t in thinks)
+
+                    if finish_reason == "length":
+                        print(f"⚠️  Response hit max_tokens ({gen_tokens} tokens) — may be incomplete")
+                        log_debug(
+                            category="tool_loop_length",
+                            message="Final response hit max_tokens limit",
+                            data={"generation_tokens": gen_tokens, "response_chars": len(raw_response)},
+                            conversation_id=str(conversation_id),
+                            agent_id=str(agent.id),
+                        )
 
                     # Send thinking blocks as collapsible events
                     for think in thinks:
@@ -1217,8 +1303,17 @@ async def _chat_stream_internal(
                     result = execute_tool(tc["name"], tc["arguments"], agent.id, db)
                     print(f"  ✅ {tc['name']} → {result}")
 
-                    yield f"data: {json.dumps({'type': 'tool_result', 'name': tc['name'], 'success': 'error' not in result, 'result': result, 'error': result.get('error') if isinstance(result, dict) else None})}\n\n"
+                    error = result.get('error') if isinstance(result, dict) else None
+                    yield f"data: {json.dumps({'type': 'tool_result', 'name': tc['name'], 'success': error is None, 'result': result, 'error': error})}\n\n"
                     current_messages.append(format_tool_result_message(tc["name"], result, call_id))
+
+                    # Persist for metadata so tool blocks survive reload
+                    all_tool_calls.append({
+                        "name": tc["name"],
+                        "arguments": tc["arguments"],
+                        "result": result,
+                        "error": error,
+                    })
 
             # Save final accumulated response to DB
             assistant_tags = extract_keywords(accumulated_response, max_keywords=5)
@@ -1229,6 +1324,8 @@ async def _chat_stream_internal(
             }
             if all_thinking_blocks:
                 assistant_metadata["thinking_blocks"] = all_thinking_blocks
+            if all_tool_calls:
+                assistant_metadata["tool_calls"] = all_tool_calls
             if memory_narrative:
                 assistant_metadata["memory_narrative"] = memory_narrative
 
