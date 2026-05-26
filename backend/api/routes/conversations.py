@@ -141,7 +141,7 @@ async def get_context_window(
     # This is an approximation for display purposes
     memory_estimate = ""
     if messages_dropped > 0:
-        memory_estimate = "\n\n=== Memories Surfacing ===\n[Estimated: memories from dropped messages would go here]\n"
+        memory_estimate = "\n\n=== Background Context (from past conversations, NOT current) ===\n[Estimated: memories from dropped messages would go here]\n"
         system_content += memory_estimate
 
     system_tokens = count_tokens(system_content)
@@ -268,6 +268,8 @@ async def delete_conversation(
     db.delete(conversation)
     db.commit()
 
+    get_inference_engine().invalidate_conversation(conversation_id)
+
     return {"message": f"Conversation {conversation_id} deleted"}
 
 
@@ -334,6 +336,8 @@ async def edit_message(
     db.commit()
     db.refresh(message)
 
+    get_inference_engine().invalidate_conversation(conversation_id)
+
     return message.to_dict()
 
 
@@ -366,6 +370,8 @@ async def delete_message(
     # Delete message
     db.delete(message)
     db.commit()
+
+    get_inference_engine().invalidate_conversation(conversation_id)
 
     return {"success": True, "message": "Message deleted"}
 
@@ -421,6 +427,8 @@ async def save_partial_message(
     db.commit()
     db.refresh(assistant_message)
 
+    get_inference_engine().invalidate_conversation(conversation_id)
+
     # Log partial assistant message to JSONL
     log_message(
         conversation_id=str(conversation_id),
@@ -468,7 +476,6 @@ async def regenerate_from_message(
     if not from_message:
         raise HTTPException(404, f"Message {message_id} not found in this conversation")
 
-    #CULPRIT ???
     # If regenerating from assistant message, find the user message before it
     if from_message.role == "assistant":
         # Find the most recent user message before this assistant message
@@ -488,6 +495,8 @@ async def regenerate_from_message(
         ).delete()
         db.commit()
 
+        get_inference_engine().invalidate_conversation(conversation_id)
+
         return {
             "status": "ready_to_regenerate",
             "message": "Assistant message deleted. Call /chat endpoint to regenerate.",
@@ -501,6 +510,8 @@ async def regenerate_from_message(
         Message.created_at > from_message.created_at
     ).delete()
     db.commit()
+
+    get_inference_engine().invalidate_conversation(conversation_id)
 
     return {
         "status": "ready_to_regenerate",
@@ -729,7 +740,12 @@ async def chat(
 
         # Only add if there's actual content after sanitizing
         if sanitized:
-            system_content += f"\n\n=== Memories Surfacing ===\n{sanitized}\n"
+            system_content += (
+                "\n\n=== Background Context (from past conversations, NOT current) ===\n"
+                "The following are summaries of past interactions. They are NOT part of "
+                "this conversation and you did NOT just say or think any of this:\n\n"
+                f"{sanitized}\n"
+            )
 
     # Build final messages array using the pre-calculated messages_in_context
     # IMPORTANT: Add the current user message at the end (it's not in history yet)
@@ -849,15 +865,21 @@ async def chat(
         print(f"{'='*80}\n")
 
     # Save assistant message and embed it
-    # Extract initial thematic tags for assistant message
-    assistant_tags = extract_keywords(final_response, max_keywords=5)
+    # Strip thinks before storage (matches streaming path behavior — the chat
+    # template doesn't preserve thinks in history, so storing them would cause
+    # a KV cache token mismatch on the next turn)
+    clean_response, thinking_blocks = extract_and_strip_thinks(final_response)
+
+    assistant_tags = extract_keywords(clean_response, max_keywords=5)
 
     # Build metadata
     message_metadata = {
         "model": agent.model_path,
-        "surfaced_memories_count": 0,  # Will be updated after memory coordination
+        "surfaced_memories_count": 0,
         "tags": assistant_tags
     }
+    if thinking_blocks:
+        message_metadata["thinking_blocks"] = thinking_blocks
 
     # Add usage info if available (from standard MLX server)
     if not use_router_logging and 'result' in locals():
@@ -875,12 +897,12 @@ async def chat(
     assistant_message = Message(
         conversation_id=conversation_id,
         role="assistant",
-        content=final_response,
+        content=clean_response,
         metadata_=message_metadata
     )
 
     # Generate embedding with tags for assistant message
-    assistant_embedding = embedding_service.embed_with_tags(final_response, assistant_tags)
+    assistant_embedding = embedding_service.embed_with_tags(clean_response, assistant_tags)
     assistant_message.embedding = assistant_embedding
 
     db.add(assistant_message)
@@ -1078,7 +1100,12 @@ async def _chat_stream_internal(
         sanitized = re.sub(r'\n\s*\n\s*\n+', '\n\n', sanitized)
         sanitized = sanitized.strip()
         if sanitized:
-            user_msg_parts.append(f"=== Memories Surfacing ===\n{sanitized}")
+            user_msg_parts.append(
+                "=== Background Context (from past conversations, NOT current) ===\n"
+                "The following are summaries of past interactions. They are NOT part of "
+                "this conversation and you did NOT just say or think any of this:\n\n"
+                f"{sanitized}"
+            )
 
     user_msg_parts.append(message)
 

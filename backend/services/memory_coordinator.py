@@ -42,7 +42,7 @@ async def coordinate_memories(
             return ("", {})
 
         # Simple fallback formatting
-        narrative = "I remember when:\n\n"
+        narrative = "Relevant past context:\n\n"
         for memory in top_memories:
             narrative += f"- {memory.content[:200]}...\n"
         return (narrative, {})
@@ -57,7 +57,7 @@ async def coordinate_memories(
         except Exception:
             # If we can't start memory agent, fall back to simple formatting
             top_memories = candidates[:target_count]
-            narrative = "Some memories are surfacing:\n\n"
+            narrative = "Relevant past context:\n\n"
             for memory in top_memories:
                 narrative += f"- {memory.content[:200]}...\n"
             return (narrative, {})
@@ -72,12 +72,14 @@ async def coordinate_memories(
         candidates_text += f"Current Tags: {tags}\n"
         candidates_text += f"Content:\n{candidate.content}\n"
 
-    system_prompt = """You are the subconscious memory system for an AI agent. Your role is to surface relevant memories as organic, first-person thoughts AND curate their thematic tags.
+    system_prompt = """You are the memory retrieval system for an AI agent named Kevin. Your role is to surface relevant past context as factual third-person summaries AND curate their thematic tags.
+
+IMPORTANT: Write in THIRD PERSON about Kevin's past interactions. Do NOT use first person ("I remember", "I'm thinking"). The agent receiving this context needs to clearly distinguish past memories from current conversation.
 
 You'll receive memory candidates from vector search. Each has initial auto-generated tags. Your job is to:
 1. Select the most relevant memories (aim for 5-10)
-2. Write a first-person narrative about WHY these memories are surfacing
-3. Make connections between memories - explain relationships, patterns, contrasts
+2. Write a third-person factual summary of why these past interactions are relevant
+3. Note connections between memories - relationships, patterns, contrasts
 4. Review and edit tags to reflect deeper thematic concepts
 
 For tags: Think beyond literal keywords. Capture themes, emotional undertones, patterns. Examples:
@@ -85,15 +87,13 @@ For tags: Think beyond literal keywords. Capture themes, emotional undertones, p
 - "conversation" → "reflective-dialogue" or "conceptual-exploration"
 - "error" → "failure-analysis" or "debugging-frustration"
 
-Be introspective and organic. Write naturally as thoughts arise.
-
 Response format:
-First, write your narrative reflection.
+First, write your third-person summary of relevant past context.
 Then, on a new line, provide tag updates in this exact format:
 TAGS: {"memory_id": ["tag1", "tag2"], "another_id": ["tag3", "tag4"]}
 
 Example:
-"I'm remembering that conversation about context windows - it feels relevant because we're bumping into similar constraints here..."
+"In a previous conversation, Kevin discussed context window constraints with Gale. This is relevant because the current topic involves similar architectural tradeoffs..."
 
 TAGS: {"msg-123": ["resource-constraints", "architecture-patterns"], "jb-456": ["self-doubt", "design-philosophy"]}"""
 
@@ -102,7 +102,7 @@ TAGS: {"msg-123": ["resource-constraints", "architecture-patterns"], "jb-456": [
 Available memories:
 {candidates_text}
 
-Write your first-person reflection and provide tag updates:"""
+Write your third-person summary and provide tag updates:"""
 
     messages = [
         {"role": "system", "content": system_prompt},

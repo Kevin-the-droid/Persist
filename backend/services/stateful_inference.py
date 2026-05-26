@@ -43,6 +43,7 @@ mx = None
 load = None
 stream_generate = None
 make_prompt_cache = None
+trim_prompt_cache = None
 make_sampler = None
 
 
@@ -120,10 +121,10 @@ class StatefulInferenceEngine:
         """
         if self._mlx_imported:
             return
-        global mx, load, stream_generate, make_prompt_cache, make_sampler
+        global mx, load, stream_generate, make_prompt_cache, trim_prompt_cache, make_sampler
         import mlx.core as _mx
         from mlx_lm import load as _load, stream_generate as _stream_generate
-        from mlx_lm.models.cache import make_prompt_cache as _make_prompt_cache
+        from mlx_lm.models.cache import make_prompt_cache as _make_prompt_cache, trim_prompt_cache as _trim_prompt_cache
         from mlx_lm.sample_utils import make_sampler as _make_sampler
         import mlx_lm.generate as _gen_module
 
@@ -131,6 +132,7 @@ class StatefulInferenceEngine:
         load = _load
         stream_generate = _stream_generate
         make_prompt_cache = _make_prompt_cache
+        trim_prompt_cache = _trim_prompt_cache
         make_sampler = _make_sampler
 
         # Rebind the module-level stream so wired_limit / mx.stream contexts
@@ -408,6 +410,12 @@ class StatefulInferenceEngine:
                     raise item
                 yield item
         finally:
+            # Trim generated tokens from cache so only prompt tokens remain.
+            # Without this, the next turn's delta calculation is wrong: the
+            # cache contains think-block + response tokens that won't appear
+            # in the re-tokenized history (thinks are stripped before storage).
+            if gen_meta.generation_tokens > 0:
+                trim_prompt_cache(conv_cache.prompt_cache, gen_meta.generation_tokens)
             conv_cache.touch()
 
 
